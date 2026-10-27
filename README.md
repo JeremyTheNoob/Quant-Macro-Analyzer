@@ -20,7 +20,7 @@
 
 1. 克隆项目到本地
 ```bash
-git clone https://github.com/yourusername/Quant-Macro-Analyzer.git
+git clone https://github.com/JeremyTheNoob/Quant-Macro-Analyzer.git
 cd Quant-Macro-Analyzer
 ```
 
