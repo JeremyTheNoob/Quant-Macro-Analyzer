@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>本地数据分析控制台</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Microsoft YaHei", sans-serif;
+         background: #f5f6f8; color: #222; }
+  header { padding: 18px 24px; background: #1f2a3d; color: #fff; }
+  header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+  header p  { margin: 4px 0 0; font-size: 12px; opacity: .75; }
+  main { display: grid; grid-template-columns: 360px 1fr; gap: 16px;
+         padding: 16px 24px; align-items: start; }
+  .panel { background: #fff; border-radius: 8px; padding: 16px;
+           box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  .panel h2 { margin: 0 0 12px; font-size: 14px; color: #444; }
+  .btn { display: block; width: 100%; margin-bottom: 10px; padding: 11px 14px;
+         font-size: 14px; border: none; border-radius: 6px; cursor: pointer;
+         background: #2d6cdf; color: #fff; transition: .15s; }
+  .btn:hover:not(:disabled) { background: #1e57bd; }
+  .btn:disabled { background: #aab4c4; cursor: not-allowed; }
+  .btn.secondary { background: #4b5b73; }
+  .btn.secondary:hover:not(:disabled) { background: #3a4659; }
+  #status { font-size: 12px; color: #666; margin-top: 8px; min-height: 18px; }
+  #logs { background: #101820; color: #d4e0ec; font-family: Consolas, monospace;
+          font-size: 12px; padding: 12px; border-radius: 6px;
+          height: 340px; overflow-y: auto; white-space: pre-wrap; line-height: 1.5; }
+  #gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+             gap: 14px; }
+  .card { background: #fff; border-radius: 8px; padding: 10px;
+          box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  .card .title { font-size: 12px; color: #555; margin-bottom: 6px;
+                 word-break: break-all; }
+  .card img { width: 100%; border-radius: 4px; cursor: zoom-in; display: block; }
+  #lightbox { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.85);
+              z-index: 99; padding: 24px; overflow: auto; }
+  #lightbox img { max-width: 100%; margin: auto; display: block; }
+</style>
+</head>
+<body>
+<header>
+  <h1>本地数据分析控制台</h1>
+  <p>点击按钮运行脚本，日志实时输出，分析完成后自动加载图表</p>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>数据获取</h2>
+    <button class="btn" data-task="fetch_stock">获取股票数据</button>
+    <button class="btn" data-task="fetch_bond">获取债券数据</button>
+    <h2 style="margin-top:18px;">数据分析</h2>
+    <button class="btn secondary" data-task="analyze_stock">股票均值回归分析</button>
+    <button class="btn secondary" data-task="analyze_bond">债券四层决策分析</button>
+    <div id="status">就绪</div>
+  </section>
+
+  <section class="panel">
+    <h2>运行日志</h2>
+    <div id="logs"></div>
+  </section>
+</main>
+
+<section class="panel" style="margin: 0 24px 24px;">
+  <h2>分析图表</h2>
+  <div id="gallery"></div>
+</section>
+
+<div id="lightbox"><img id="lightbox-img" alt=""></div>
+
+<script>
+const statusEl = document.getElementById('status');
+const logsEl   = document.getElementById('logs');
+const gallery  = document.getElementById('gallery');
+const buttons  = document.querySelectorAll('button[data-task]');
+let pollTimer  = null;
+
+function setButtonsDisabled(disabled) {
+  buttons.forEach(b => b.disabled = disabled);
+}
+
+function renderLogs(lines) {
+  logsEl.textContent = (lines || []).join('\n');
+  logsEl.scrollTop = logsEl.scrollHeight;
+}
+
+async function refreshImages() {
+  try {
+    const res = await fetch('/api/images');
+    const data = await res.json();
+    const ts = Date.now();
+    const items = [];
+    for (const dir in data) {
+      for (const name of data[dir]) {
+        items.push(`
+          <div class="card">
+            <div class="title">${dir} / ${name}</div>
+            <img src="/output/${encodeURIComponent(name)}?t=${ts}"
+                 alt="${name}" onclick="openLightbox(this.src)">
+          </div>`);
+      }
+    }
+    gallery.innerHTML = items.length
+      ? items.join('')
+      : '<div style="color:#888;font-size:13px;">暂无图表，请先运行分析脚本</div>';
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function openLightbox(src) {
+  document.getElementById('lightbox-img').src = src;
+  document.getElementById('lightbox').style.display = 'block';
+}
+document.getElementById('lightbox').onclick = () => {
+  document.getElementById('lightbox').style.display = 'none';
+};
+
+async function poll() {
+  try {
+    const res = await fetch('/api/status');
+    const data = await res.json();
+    renderLogs(data.logs);
+    if (data.running) {
+      statusEl.textContent = `运行中：${data.current}`;
+      setButtonsDisabled(true);
+    } else {
+      setButtonsDisabled(false);
+      statusEl.textContent = data.last
+        ? (data.last.error ? `失败：${data.last.error}` : '空闲（上一次任务已结束）')
+        : '就绪';
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      refreshImages();
+    }
+  } catch (e) {
+    statusEl.textContent = '与本地服务失去连接';
+  }
+}
+
+async function startTask(taskId) {
+  const res = await fetch(`/api/start/${taskId}`, { method: 'POST' });
+  const data = await res.json();
+  if (!data.ok) { statusEl.textContent = data.msg; return; }
+  statusEl.textContent = data.msg;
+  setButtonsDisabled(true);
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(poll, 800);
+  poll();
+}
+
+buttons.forEach(btn => {
+  btn.addEventListener('click', () => startTask(btn.dataset.task));
+});
+
+// 页面加载时先拉一次已有图表
+refreshImages();
+</script>
+</body>
+</html>
